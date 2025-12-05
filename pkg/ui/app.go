@@ -305,8 +305,8 @@ func (m *Model) executeFastDeploy() tea.Cmd {
 			return FastDeployCompleteMsg{err: fmt.Errorf("local path is not a directory: %s", localPath)}
 		}
 
-		// Target path is /app/assets/{selected_folder}
-		targetPath := fmt.Sprintf("/app/assets/%s", m.assetFolder)
+		// Target path is /app/assets/{selected_folder}/js
+		targetPath := fmt.Sprintf("/app/assets/%s/js", m.assetFolder)
 
 		// Step 1: Clear the target directory
 		err = m.k8sClient.ClearDirectory(ctx, m.namespace, podName, m.container, targetPath)
@@ -1225,7 +1225,7 @@ func (m Model) View() string {
 
 	case StateInputValue:
 		if m.command != nil && m.command.Name == "fast-deploy" {
-			b.WriteString(InfoStyle.Render(fmt.Sprintf("Target: /app/assets/%s", m.assetFolder)))
+			b.WriteString(InfoStyle.Render(fmt.Sprintf("Target: /app/assets/%s/js", m.assetFolder)))
 			b.WriteString("\n\n")
 			b.WriteString(LabelStyle.Render("Enter local dist folder path:"))
 		} else {
