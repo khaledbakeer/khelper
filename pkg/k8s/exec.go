@@ -8,6 +8,7 @@ import (
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
+	"golang.org/x/term"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 )
@@ -80,6 +81,13 @@ func (c *Client) Shell(ctx context.Context, namespace, podName, containerName st
 			shells = append(shells, s)
 		}
 	}
+
+	// Put terminal into raw mode for proper TTY handling
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return fmt.Errorf("failed to set terminal to raw mode: %w", err)
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState)
 
 	for _, sh := range shells {
 		err := c.Exec(ctx, ExecOptions{
