@@ -8,6 +8,7 @@ var (
 	SecondaryColor = lipgloss.Color("#10B981")
 	AccentColor    = lipgloss.Color("#F59E0B")
 	ErrorColor     = lipgloss.Color("#EF4444")
+	WarningColor   = lipgloss.Color("#F59E0B")
 	MutedColor     = lipgloss.Color("#6B7280")
 	TextColor      = lipgloss.Color("#F3F4F6")
 	BgColor        = lipgloss.Color("#1F2937")
@@ -34,6 +35,11 @@ var (
 	InfoStyle = lipgloss.NewStyle().
 			Foreground(MutedColor).
 			Italic(true)
+
+	// Warning style
+	WarningStyle = lipgloss.NewStyle().
+			Foreground(WarningColor).
+			Bold(true)
 
 	// Label style
 	LabelStyle = lipgloss.NewStyle().

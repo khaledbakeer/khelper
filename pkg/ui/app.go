@@ -152,10 +152,11 @@ type Model struct {
 
 	showNamespaceChange  bool
 	showKubeConfigChange bool
+	initialClientErr     error
 }
 
 // NewModel creates a new application model
-func NewModel(cfg *config.Config, client *k8s.Client) Model {
+func NewModel(cfg *config.Config, client *k8s.Client, clientErr error) Model {
 	valueInput := textinput.New()
 	valueInput.CharLimit = 200
 	valueInput.Width = 50
@@ -163,19 +164,24 @@ func NewModel(cfg *config.Config, client *k8s.Client) Model {
 	valueInput.TextStyle = BaseStyle
 
 	m := Model{
-		config:        cfg,
-		k8sClient:     client,
-		kubeconfig:    client.GetKubeConfigPath(),
-		namespace:     cfg.LastNamespace,
-		kcSelector:    NewFuzzyList("Select Kubeconfig"),
-		nsSelector:    NewFuzzyList("Select Namespace"),
-		depSelector:   NewFuzzyList("Select Deployment"),
-		cmdSelector:   NewFuzzyList("Select Command"),
-		podSelector:   NewFuzzyList("Select Pod"),
-		contSelector:  NewFuzzyList("Select Container"),
-		assetSelector: NewFuzzyList("Select Asset Folder"),
-		valueInput:    valueInput,
-		logViewer:     NewLogViewer(),
+		config:           cfg,
+		k8sClient:        client,
+		initialClientErr: clientErr,
+		namespace:        cfg.LastNamespace,
+		kcSelector:       NewFuzzyList("Select Kubeconfig"),
+		nsSelector:       NewFuzzyList("Select Namespace"),
+		depSelector:      NewFuzzyList("Select Deployment"),
+		cmdSelector:      NewFuzzyList("Select Command"),
+		podSelector:      NewFuzzyList("Select Pod"),
+		contSelector:     NewFuzzyList("Select Container"),
+		assetSelector:    NewFuzzyList("Select Asset Folder"),
+		valueInput:       valueInput,
+		logViewer:        NewLogViewer(),
+	}
+
+	// Get kubeconfig path if client exists
+	if client != nil {
+		m.kubeconfig = client.GetKubeConfigPath()
 	}
 
 	// Set up command list
@@ -185,8 +191,11 @@ func NewModel(cfg *config.Config, client *k8s.Client) Model {
 	}
 	m.cmdSelector.SetItems(cmdNames)
 
-	// Determine initial state
-	if m.namespace == "" {
+	// Determine initial state - if no client, force kubeconfig selection
+	if client == nil {
+		m.state = StateSelectKubeConfig
+		m.showKubeConfigChange = true
+	} else if m.namespace == "" {
 		m.state = StateSelectNamespace
 	} else {
 		m.state = StateSelectDeployment
@@ -196,6 +205,10 @@ func NewModel(cfg *config.Config, client *k8s.Client) Model {
 }
 
 func (m Model) Init() tea.Cmd {
+	// If no client, load kubeconfig options
+	if m.k8sClient == nil {
+		return m.loadKubeConfigs()
+	}
 	if m.namespace == "" {
 		return m.loadNamespaces()
 	}
@@ -1175,7 +1188,12 @@ func (m Model) View() string {
 	// Main content based on state
 	switch m.state {
 	case StateSelectKubeConfig:
-		if m.showKubeConfigChange {
+		if m.k8sClient == nil && m.initialClientErr != nil {
+			b.WriteString(WarningStyle.Render("No kubeconfig found or configured."))
+			b.WriteString("\n")
+			b.WriteString(InfoStyle.Render("Please select or enter a kubeconfig path:"))
+			b.WriteString("\n\n")
+		} else if m.showKubeConfigChange {
 			b.WriteString(InfoStyle.Render("Changing kubeconfig..."))
 			b.WriteString("\n\n")
 		}

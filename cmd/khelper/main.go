@@ -63,18 +63,18 @@ func runInteractive(cmd *cobra.Command, args []string) error {
 		cfg.LastNamespace = namespace
 	}
 
-	// Use kubeconfig from config if available
+	// Try to create k8s client, but don't fail if no kubeconfig exists
+	// The UI will prompt user to select/enter a kubeconfig path
 	var k8sClient *k8s.Client
+	var clientErr error
 	if cfg.KubeConfig != "" {
-		k8sClient, err = k8s.NewClientWithConfig(cfg.KubeConfig)
+		k8sClient, clientErr = k8s.NewClientWithConfig(cfg.KubeConfig)
 	} else {
-		k8sClient, err = k8s.NewClient()
-	}
-	if err != nil {
-		return fmt.Errorf("failed to create kubernetes client: %w", err)
+		k8sClient, clientErr = k8s.NewClient()
 	}
 
-	model := ui.NewModel(cfg, k8sClient)
+	// Create model - it will handle nil client by showing kubeconfig selection
+	model := ui.NewModel(cfg, k8sClient, clientErr)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
