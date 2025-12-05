@@ -64,7 +64,7 @@ func (c *Client) ListDirectories(ctx context.Context, namespace, podName, contai
 
 // ClearDirectory removes all files and directories inside a path
 func (c *Client) ClearDirectory(ctx context.Context, namespace, podName, container, path string) error {
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
 
 	// Remove contents but keep the directory itself
 	err := c.Exec(ctx, ExecOptions{
@@ -72,6 +72,7 @@ func (c *Client) ClearDirectory(ctx context.Context, namespace, podName, contain
 		PodName:       podName,
 		ContainerName: container,
 		Command:       []string{"sh", "-c", fmt.Sprintf("rm -rf %s/* %s/.[!.]* %s/..?* 2>/dev/null; true", path, path, path)},
+		Stdout:        &stdout,
 		Stderr:        &stderr,
 		TTY:           false,
 	})
@@ -84,12 +85,29 @@ func (c *Client) ClearDirectory(ctx context.Context, namespace, podName, contain
 }
 
 // UploadDirectory uploads a local directory to a container path
+// This mimics kubectl cp behavior using tar
 func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, container, localPath, remotePath string) (int, error) {
+	// First, create the target directory
+	var stdout, stderr bytes.Buffer
+	err := c.Exec(ctx, ExecOptions{
+		Namespace:     namespace,
+		PodName:       podName,
+		ContainerName: container,
+		Command:       []string{"sh", "-c", fmt.Sprintf("mkdir -p '%s'", remotePath)},
+		Stdout:        &stdout,
+		Stderr:        &stderr,
+		TTY:           false,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to create target directory: %w", err)
+	}
+
 	// Create a tar archive of the local directory
 	var tarBuffer bytes.Buffer
+	tw := tar.NewWriter(&tarBuffer)
 	fileCount := 0
 
-	err := filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -113,7 +131,6 @@ func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, contai
 		header.Name = relPath
 
 		// Write header
-		tw := tar.NewWriter(&tarBuffer)
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
@@ -139,152 +156,126 @@ func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, contai
 		return 0, fmt.Errorf("failed to create tar archive: %w", err)
 	}
 
-	// We need to properly close the tar writer
-	var finalTarBuffer bytes.Buffer
-	tw := tar.NewWriter(&finalTarBuffer)
-
-	err = filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(localPath, path)
-		if err != nil {
-			return err
-		}
-
-		if relPath == "." {
-			return nil
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		header.Name = relPath
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		if !info.IsDir() {
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-
-			if _, err := io.Copy(tw, file); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return 0, fmt.Errorf("failed to create tar archive: %w", err)
+	if err := tw.Close(); err != nil {
+		return 0, fmt.Errorf("failed to close tar writer: %w", err)
 	}
 
-	tw.Close()
-
-	// Compress the tar archive
-	var gzBuffer bytes.Buffer
-	gzWriter := gzip.NewWriter(&gzBuffer)
-	if _, err := io.Copy(gzWriter, &finalTarBuffer); err != nil {
-		return 0, fmt.Errorf("failed to compress archive: %w", err)
-	}
-	gzWriter.Close()
-
-	// Upload using base64 encoding through exec
-	// First, create the target directory if it doesn't exist
-	var stderr bytes.Buffer
+	// Upload using tar extraction in container
+	// This is similar to how kubectl cp works
+	stdout.Reset()
+	stderr.Reset()
 	err = c.Exec(ctx, ExecOptions{
 		Namespace:     namespace,
 		PodName:       podName,
 		ContainerName: container,
-		Command:       []string{"sh", "-c", fmt.Sprintf("mkdir -p %s", remotePath)},
+		Command:       []string{"tar", "-xf", "-", "-C", remotePath},
+		Stdin:         &tarBuffer,
+		Stdout:        &stdout,
 		Stderr:        &stderr,
 		TTY:           false,
 	})
-	if err != nil {
-		return 0, fmt.Errorf("failed to create target directory: %w", err)
-	}
-
-	// Upload files one by one using cat
-	fileCount = 0
-	err = filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(localPath, path)
-		if err != nil {
-			return err
-		}
-
-		if relPath == "." {
-			return nil
-		}
-
-		targetFile := filepath.Join(remotePath, relPath)
-		// Convert to unix path
-		targetFile = strings.ReplaceAll(targetFile, "\\", "/")
-
-		if info.IsDir() {
-			// Create directory
-			err = c.Exec(ctx, ExecOptions{
-				Namespace:     namespace,
-				PodName:       podName,
-				ContainerName: container,
-				Command:       []string{"sh", "-c", fmt.Sprintf("mkdir -p '%s'", targetFile)},
-				TTY:           false,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to create directory %s: %w", targetFile, err)
-			}
-		} else {
-			// Upload file content
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-
-			// Create parent directory
-			parentDir := filepath.Dir(targetFile)
-			parentDir = strings.ReplaceAll(parentDir, "\\", "/")
-			err = c.Exec(ctx, ExecOptions{
-				Namespace:     namespace,
-				PodName:       podName,
-				ContainerName: container,
-				Command:       []string{"sh", "-c", fmt.Sprintf("mkdir -p '%s'", parentDir)},
-				TTY:           false,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to create parent directory: %w", err)
-			}
-
-			// Write file using cat and stdin
-			err = c.Exec(ctx, ExecOptions{
-				Namespace:     namespace,
-				PodName:       podName,
-				ContainerName: container,
-				Command:       []string{"sh", "-c", fmt.Sprintf("cat > '%s'", targetFile)},
-				Stdin:         bytes.NewReader(content),
-				TTY:           false,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to upload file %s: %w", targetFile, err)
-			}
-			fileCount++
-		}
-
-		return nil
-	})
 
 	if err != nil {
-		return fileCount, err
+		return 0, fmt.Errorf("failed to extract files in container: %w (stderr: %s)", err, stderr.String())
 	}
 
 	return fileCount, nil
+}
+
+// UploadFile uploads a single file to a container path (with gzip support like your script)
+func (c *Client) UploadFile(ctx context.Context, namespace, podName, container, localFile, remotePath string) error {
+	// Read file content
+	content, err := os.ReadFile(localFile)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	fileName := filepath.Base(localFile)
+	remoteFile := filepath.Join(remotePath, fileName)
+	remoteFile = strings.ReplaceAll(remoteFile, "\\", "/")
+
+	// Create tar with single file
+	var tarBuffer bytes.Buffer
+	tw := tar.NewWriter(&tarBuffer)
+
+	header := &tar.Header{
+		Name: fileName,
+		Mode: 0644,
+		Size: int64(len(content)),
+	}
+
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+
+	if _, err := tw.Write(content); err != nil {
+		return err
+	}
+
+	tw.Close()
+
+	// Upload using tar
+	var stdout, stderr bytes.Buffer
+	err = c.Exec(ctx, ExecOptions{
+		Namespace:     namespace,
+		PodName:       podName,
+		ContainerName: container,
+		Command:       []string{"tar", "-xf", "-", "-C", remotePath},
+		Stdin:         &tarBuffer,
+		Stdout:        &stdout,
+		Stderr:        &stderr,
+		TTY:           false,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to upload file: %w (stderr: %s)", err, stderr.String())
+	}
+
+	// If it's a JS file, also create gzipped version like your script does
+	if strings.HasSuffix(localFile, ".js") {
+		var gzBuffer bytes.Buffer
+		gzWriter := gzip.NewWriter(&gzBuffer)
+		gzWriter.Write(content)
+		gzWriter.Close()
+
+		gzFileName := fileName + ".gz"
+
+		var gzTarBuffer bytes.Buffer
+		gzTw := tar.NewWriter(&gzTarBuffer)
+
+		gzHeader := &tar.Header{
+			Name: gzFileName,
+			Mode: 0644,
+			Size: int64(gzBuffer.Len()),
+		}
+
+		if err := gzTw.WriteHeader(gzHeader); err != nil {
+			return err
+		}
+
+		if _, err := gzTw.Write(gzBuffer.Bytes()); err != nil {
+			return err
+		}
+
+		gzTw.Close()
+
+		stdout.Reset()
+		stderr.Reset()
+		err = c.Exec(ctx, ExecOptions{
+			Namespace:     namespace,
+			PodName:       podName,
+			ContainerName: container,
+			Command:       []string{"tar", "-xf", "-", "-C", remotePath},
+			Stdin:         &gzTarBuffer,
+			Stdout:        &stdout,
+			Stderr:        &stderr,
+			TTY:           false,
+		})
+
+		if err != nil {
+			return fmt.Errorf("failed to upload gzipped file: %w", err)
+		}
+	}
+
+	return nil
 }

@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -115,16 +116,19 @@ func (c *Client) Shell(ctx context.Context, namespace, podName, containerName st
 func (c *Client) CheckShellAvailable(ctx context.Context, namespace, podName, containerName string) (string, error) {
 	shells := []string{"/bin/bash", "/bin/sh", "/bin/ash", "sh", "ash"}
 
+	var stdout, stderr bytes.Buffer
+
 	for _, sh := range shells {
+		stdout.Reset()
+		stderr.Reset()
 		// Try running "exit 0" with the shell to check if it exists
 		err := c.Exec(ctx, ExecOptions{
 			Namespace:     namespace,
 			PodName:       podName,
 			ContainerName: containerName,
 			Command:       []string{sh, "-c", "exit 0"},
-			Stdin:         nil,
-			Stdout:        nil,
-			Stderr:        nil,
+			Stdout:        &stdout,
+			Stderr:        &stderr,
 			TTY:           false,
 		})
 
