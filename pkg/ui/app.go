@@ -29,6 +29,7 @@ const (
 	StateSelectPod
 	StateSelectContainer
 	StateSelectAssetFolder
+	StateSelectLocalPath
 	StateInputValue
 	StateExecuting
 	StateShowResult
@@ -132,15 +133,16 @@ type Model struct {
 	inputValue  string
 	assetFolder string
 
-	kcSelector    FuzzyList
-	nsSelector    FuzzyList
-	depSelector   FuzzyList
-	cmdSelector   FuzzyList
-	podSelector   FuzzyList
-	contSelector  FuzzyList
-	assetSelector FuzzyList
-	valueInput    textinput.Model
-	logViewer     LogViewer
+	kcSelector       FuzzyList
+	nsSelector       FuzzyList
+	depSelector      FuzzyList
+	cmdSelector      FuzzyList
+	podSelector      FuzzyList
+	contSelector     FuzzyList
+	assetSelector    FuzzyList
+	localPathSelector FuzzyList
+	valueInput       textinput.Model
+	logViewer        LogViewer
 
 	result       string
 	err          error
@@ -164,19 +166,20 @@ func NewModel(cfg *config.Config, client *k8s.Client, clientErr error) Model {
 	valueInput.TextStyle = BaseStyle
 
 	m := Model{
-		config:           cfg,
-		k8sClient:        client,
-		initialClientErr: clientErr,
-		namespace:        cfg.LastNamespace,
-		kcSelector:       NewFuzzyList("Select Kubeconfig"),
-		nsSelector:       NewFuzzyList("Select Namespace"),
-		depSelector:      NewFuzzyList("Select Deployment"),
-		cmdSelector:      NewFuzzyList("Select Command"),
-		podSelector:      NewFuzzyList("Select Pod"),
-		contSelector:     NewFuzzyList("Select Container"),
-		assetSelector:    NewFuzzyList("Select Asset Folder"),
-		valueInput:       valueInput,
-		logViewer:        NewLogViewer(),
+		config:            cfg,
+		k8sClient:         client,
+		initialClientErr:  clientErr,
+		namespace:         cfg.LastNamespace,
+		kcSelector:        NewFuzzyList("Select Kubeconfig"),
+		nsSelector:        NewFuzzyList("Select Namespace"),
+		depSelector:       NewFuzzyList("Select Deployment"),
+		cmdSelector:       NewFuzzyList("Select Command"),
+		podSelector:       NewFuzzyList("Select Pod"),
+		contSelector:      NewFuzzyList("Select Container"),
+		assetSelector:     NewFuzzyList("Select Asset Folder"),
+		localPathSelector: NewFuzzyList("Select Local Path"),
+		valueInput:        valueInput,
+		logViewer:         NewLogViewer(),
 	}
 
 	// Get kubeconfig path if client exists
@@ -682,6 +685,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.contSelector, cmd = m.contSelector.Update(msg)
 	case StateSelectAssetFolder:
 		m.assetSelector, cmd = m.assetSelector.Update(msg)
+	case StateSelectLocalPath:
+		m.localPathSelector, cmd = m.localPathSelector.Update(msg)
 	case StateInputValue:
 		m.valueInput, cmd = m.valueInput.Update(msg)
 	}
@@ -715,12 +720,19 @@ func (m Model) goBack() (tea.Model, tea.Cmd) {
 		m.state = StateSelectContainer
 		m.contSelector.Reset()
 		return m, m.loadContainers()
+	case StateSelectLocalPath:
+		m.state = StateSelectAssetFolder
+		m.assetSelector.Reset()
+		return m, m.loadAssetFolders()
 	case StateInputValue:
-		// Handle back from fast-deploy input
+		// Handle back from fast-deploy input (entering new path)
 		if m.command != nil && m.command.Name == "fast-deploy" {
-			m.state = StateSelectAssetFolder
-			m.assetSelector.Reset()
-			return m, m.loadAssetFolders()
+			m.state = StateSelectLocalPath
+			m.localPathSelector.Reset()
+			paths := []string{"+ Enter new path..."}
+			paths = append(paths, m.config.GetRecentLocalPaths()...)
+			m.localPathSelector.SetItems(paths)
+			return m, nil
 		}
 		if m.command.NeedsContainer {
 			m.state = StateSelectContainer
@@ -840,18 +852,32 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.assetFolder = selected
 		m.config.AddRecentAssetFolder(selected)
-		// Now ask for local dist path
-		m.state = StateInputValue
-		// Prefill with last used local path if available
-		recentPaths := m.config.GetRecentLocalPaths()
-		if len(recentPaths) > 0 {
-			m.valueInput.SetValue(recentPaths[0])
-		} else {
-			m.valueInput.SetValue("")
-		}
-		m.valueInput.Placeholder = "Enter local dist folder path (e.g., ~/project/dist):"
-		m.valueInput.Focus()
+		// Now show local path selector
+		m.state = StateSelectLocalPath
+		m.localPathSelector.Reset()
+		// Build list with "add new" option and recent paths
+		paths := []string{"+ Enter new path..."}
+		paths = append(paths, m.config.GetRecentLocalPaths()...)
+		m.localPathSelector.SetItems(paths)
 		return m, nil
+
+	case StateSelectLocalPath:
+		selected := m.localPathSelector.GetSelected()
+		if selected == "" {
+			return m, nil
+		}
+		// Check if user wants to enter a new path
+		if strings.HasPrefix(selected, "+ ") {
+			m.state = StateInputValue
+			m.valueInput.SetValue("")
+			m.valueInput.Placeholder = "Enter local dist folder path (e.g., ~/project/dist):"
+			m.valueInput.Focus()
+			return m, nil
+		}
+		// Use selected path
+		m.inputValue = selected
+		m.state = StateExecuting
+		return m, m.executeFastDeploy()
 
 	case StateInputValue:
 		m.inputValue = m.valueInput.Value()
@@ -1247,6 +1273,11 @@ func (m Model) View() string {
 		b.WriteString(InfoStyle.Render("Select asset folder to deploy to:"))
 		b.WriteString("\n\n")
 		b.WriteString(m.assetSelector.View())
+
+	case StateSelectLocalPath:
+		b.WriteString(InfoStyle.Render(fmt.Sprintf("Target: /app/assets/%s/js", m.assetFolder)))
+		b.WriteString("\n\n")
+		b.WriteString(m.localPathSelector.View())
 
 	case StateInputValue:
 		if m.command != nil && m.command.Name == "fast-deploy" {
