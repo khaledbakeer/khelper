@@ -84,9 +84,19 @@ func (c *Client) ClearDirectory(ctx context.Context, namespace, podName, contain
 	return nil
 }
 
+// UploadResult contains the result of an upload operation
+type UploadResult struct {
+	FileCount int
+	Files     []string
+}
+
 // UploadDirectory uploads a local directory to a container path
 // This mimics kubectl cp behavior using tar
-func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, container, localPath, remotePath string) (int, error) {
+func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, container, localPath, remotePath string) (*UploadResult, error) {
+	result := &UploadResult{
+		Files: make([]string, 0),
+	}
+
 	// First, create the target directory
 	var stdout, stderr bytes.Buffer
 	err := c.Exec(ctx, ExecOptions{
@@ -99,13 +109,12 @@ func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, contai
 		TTY:           false,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("failed to create target directory: %w", err)
+		return nil, fmt.Errorf("failed to create target directory: %w", err)
 	}
 
 	// Create a tar archive of the local directory
 	var tarBuffer bytes.Buffer
 	tw := tar.NewWriter(&tarBuffer)
-	fileCount := 0
 
 	err = filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -146,18 +155,19 @@ func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, contai
 			if _, err := io.Copy(tw, file); err != nil {
 				return err
 			}
-			fileCount++
+			result.FileCount++
+			result.Files = append(result.Files, relPath)
 		}
 
 		return nil
 	})
 
 	if err != nil {
-		return 0, fmt.Errorf("failed to create tar archive: %w", err)
+		return nil, fmt.Errorf("failed to create tar archive: %w", err)
 	}
 
 	if err := tw.Close(); err != nil {
-		return 0, fmt.Errorf("failed to close tar writer: %w", err)
+		return nil, fmt.Errorf("failed to close tar writer: %w", err)
 	}
 
 	// Upload using tar extraction in container
@@ -176,10 +186,10 @@ func (c *Client) UploadDirectory(ctx context.Context, namespace, podName, contai
 	})
 
 	if err != nil {
-		return 0, fmt.Errorf("failed to extract files in container: %w (stderr: %s)", err, stderr.String())
+		return nil, fmt.Errorf("failed to extract files in container: %w (stderr: %s)", err, stderr.String())
 	}
 
-	return fileCount, nil
+	return result, nil
 }
 
 // UploadFile uploads a single file to a container path (with gzip support like your script)

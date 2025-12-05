@@ -289,12 +289,15 @@ func (m *Model) executeFastDeploy() tea.Cmd {
 		ctx := context.Background()
 		podName := extractPodName(m.pod)
 		localPath := m.inputValue
+		var logBuilder strings.Builder
 
 		// Expand ~ to home directory
 		if strings.HasPrefix(localPath, "~/") {
 			home, _ := os.UserHomeDir()
 			localPath = filepath.Join(home, localPath[2:])
 		}
+
+		logBuilder.WriteString(fmt.Sprintf("📂 Source: %s\n", localPath))
 
 		// Check if local path exists
 		info, err := os.Stat(localPath)
@@ -307,20 +310,33 @@ func (m *Model) executeFastDeploy() tea.Cmd {
 
 		// Target path is /app/assets/{selected_folder}/js
 		targetPath := fmt.Sprintf("/app/assets/%s/js", m.assetFolder)
+		logBuilder.WriteString(fmt.Sprintf("📁 Target: %s\n", targetPath))
+		logBuilder.WriteString(fmt.Sprintf("🔗 Pod: %s\n", podName))
+		logBuilder.WriteString(fmt.Sprintf("📦 Container: %s\n\n", m.container))
 
 		// Step 1: Clear the target directory
+		logBuilder.WriteString("🗑️  Clearing target directory...")
 		err = m.k8sClient.ClearDirectory(ctx, m.namespace, podName, m.container, targetPath)
 		if err != nil {
 			return FastDeployCompleteMsg{err: fmt.Errorf("failed to clear target directory: %w", err)}
 		}
+		logBuilder.WriteString(" ✓\n\n")
 
 		// Step 2: Upload files from local dist to target
-		count, err := m.k8sClient.UploadDirectory(ctx, m.namespace, podName, m.container, localPath, targetPath)
+		logBuilder.WriteString("📤 Uploading files:\n")
+		result, err := m.k8sClient.UploadDirectory(ctx, m.namespace, podName, m.container, localPath, targetPath)
 		if err != nil {
 			return FastDeployCompleteMsg{err: fmt.Errorf("failed to upload files: %w", err)}
 		}
 
-		return FastDeployCompleteMsg{result: fmt.Sprintf("Successfully deployed %d files to %s", count, targetPath)}
+		// List uploaded files
+		for _, file := range result.Files {
+			logBuilder.WriteString(fmt.Sprintf("   ✓ %s\n", file))
+		}
+
+		logBuilder.WriteString(fmt.Sprintf("\n✅ Successfully deployed %d files to %s", result.FileCount, targetPath))
+
+		return FastDeployCompleteMsg{result: logBuilder.String()}
 	}
 }
 
