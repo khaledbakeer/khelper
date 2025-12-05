@@ -650,6 +650,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.assetSelector.SetError(msg.err)
 		} else {
+			m.assetSelector.SetRecentItems(m.config.GetRecentAssetFolders())
 			m.assetSelector.SetItems(msg.folders)
 		}
 		return m, nil
@@ -838,9 +839,16 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.assetFolder = selected
+		m.config.AddRecentAssetFolder(selected)
 		// Now ask for local dist path
 		m.state = StateInputValue
-		m.valueInput.SetValue("")
+		// Prefill with last used local path if available
+		recentPaths := m.config.GetRecentLocalPaths()
+		if len(recentPaths) > 0 {
+			m.valueInput.SetValue(recentPaths[0])
+		} else {
+			m.valueInput.SetValue("")
+		}
 		m.valueInput.Placeholder = "Enter local dist folder path (e.g., ~/project/dist):"
 		m.valueInput.Focus()
 		return m, nil
@@ -870,6 +878,7 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 
 		// Handle fast-deploy local path input
 		if m.command != nil && m.command.Name == "fast-deploy" {
+			m.config.AddRecentLocalPath(m.inputValue)
 			m.state = StateExecuting
 			return m, m.executeFastDeploy()
 		}

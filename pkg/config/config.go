@@ -10,13 +10,15 @@ import (
 const MaxRecentItems = 5
 
 type Config struct {
-	LastNamespace     string              `yaml:"last_namespace"`
-	KubeConfig        string              `yaml:"kubeconfig,omitempty"`
-	RecentKubeConfigs []string            `yaml:"recent_kubeconfigs,omitempty"`
-	RecentDeployments map[string][]string `yaml:"recent_deployments,omitempty"` // namespace -> deployments
-	RecentCommands    []string            `yaml:"recent_commands,omitempty"`
-	RecentPods        map[string][]string `yaml:"recent_pods,omitempty"` // deployment -> pods
-	RecentLogSearches []string            `yaml:"recent_log_searches,omitempty"`
+	LastNamespace      string              `yaml:"last_namespace"`
+	KubeConfig         string              `yaml:"kubeconfig,omitempty"`
+	RecentKubeConfigs  []string            `yaml:"recent_kubeconfigs,omitempty"`
+	RecentDeployments  map[string][]string `yaml:"recent_deployments,omitempty"` // namespace -> deployments
+	RecentCommands     []string            `yaml:"recent_commands,omitempty"`
+	RecentPods         map[string][]string `yaml:"recent_pods,omitempty"` // deployment -> pods
+	RecentLogSearches  []string            `yaml:"recent_log_searches,omitempty"`
+	RecentAssetFolders []string            `yaml:"recent_asset_folders,omitempty"`
+	RecentLocalPaths   []string            `yaml:"recent_local_paths,omitempty"`
 }
 
 func GetConfigPath() (string, error) {
@@ -171,4 +173,29 @@ func (c *Config) GetRecentKubeConfigs() []string {
 func (c *Config) AddRecentKubeConfig(path string) error {
 	c.RecentKubeConfigs = addToRecent(c.RecentKubeConfigs, path)
 	return c.Save()
+}
+
+// AddRecentAssetFolder adds an asset folder to recent list
+func (c *Config) AddRecentAssetFolder(folder string) error {
+	c.RecentAssetFolders = addToRecent(c.RecentAssetFolders, folder)
+	return c.Save()
+}
+
+// GetRecentAssetFolders returns recent asset folders
+func (c *Config) GetRecentAssetFolders() []string {
+	return c.RecentAssetFolders
+}
+
+// AddRecentLocalPath adds a local path to recent list
+func (c *Config) AddRecentLocalPath(path string) error {
+	if path == "" {
+		return nil
+	}
+	c.RecentLocalPaths = addToRecent(c.RecentLocalPaths, path)
+	return c.Save()
+}
+
+// GetRecentLocalPaths returns recent local paths
+func (c *Config) GetRecentLocalPaths() []string {
+	return c.RecentLocalPaths
 }
